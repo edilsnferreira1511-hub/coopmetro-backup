@@ -6,10 +6,11 @@ import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {
-  getFirestore, collection, doc, getDoc, getDocs, addDoc, updateDoc, query, where, limit,
+  getFirestore, collection, doc, getDoc, getDocs, addDoc, updateDoc, setDoc, deleteDoc, query, where, limit,
   serverTimestamp, arrayUnion,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
-import { FIREBASE_CONFIG, COLECAO_BACKUPS, COLECAO_USUARIOS, COLECAO_BASES } from './config.js';
+import { FIREBASE_CONFIG, COLECAO_BACKUPS, COLECAO_USUARIOS, COLECAO_BASES, COLECAO_TG_CODIGOS, COLECAO_TG_VINCULOS } from './config.js';
+import { gerarCodigo } from './telegram.js';
 import { mapearUsuarioXpt } from './perfil.js';
 import { podeCriar, podeDecidir, podeColocarEmAnalise, podeCancelar, basesVisiveis } from './acesso.js';
 
@@ -142,6 +143,21 @@ async function _cancelar(p, r) {
   await updateDoc(doc(db, COLECAO_BACKUPS, r.id), { status: 'CANCELADO', historico: arrayUnion(entrada) });
 }
 
+// ---------- Vínculo com o Telegram ----------
+// O app só gera o código e lê/apaga o vínculo. Quem grava o vínculo é o Apps Script (conta de serviço).
+async function _gerarCodigoTelegram(p) {
+  const codigo = gerarCodigo((n) => crypto.getRandomValues(new Uint8Array(n)));
+  await setDoc(doc(db, COLECAO_TG_CODIGOS, p.uid), { codigo, nome: p.nome.slice(0, 80), geradoEm: serverTimestamp() });
+  return codigo;
+}
+async function _vinculoTelegram(p) {
+  const s = await getDoc(doc(db, COLECAO_TG_VINCULOS, p.uid));
+  return s.exists() ? { vinculadoEm: s.data().vinculadoEm ?? null } : null;
+}
+async function _desvincularTelegram(p) {
+  await deleteDoc(doc(db, COLECAO_TG_VINCULOS, p.uid));
+}
+
 // Versões com erro traduzido (as telas usam estas).
 export const carregarPerfil = seguro(_carregarPerfil);
 export const criarSolicitacao = seguro(_criarSolicitacao);
@@ -150,3 +166,6 @@ export const obterSolicitacao = seguro(_obterSolicitacao);
 export const colocarEmAnalise = seguro(_colocarEmAnalise);
 export const decidir = seguro(_decidir);
 export const cancelar = seguro(_cancelar);
+export const gerarCodigoTelegram = seguro(_gerarCodigoTelegram);
+export const vinculoTelegram = seguro(_vinculoTelegram);
+export const desvincularTelegram = seguro(_desvincularTelegram);

@@ -16,13 +16,18 @@ export const FIREBASE_CONFIG = {
 };
 
 // Versão exibida no Perfil (confira se o celular está com o site atualizado). Mantenha igual ao VERSAO do sw.js.
-export const VERSAO_APP = 'v6';
+export const VERSAO_APP = 'v8';
 
 // ---- Caminhos no Firestore do XPT (informados pelo responsável) ----
 export const COLECAO_USUARIOS = 'env/producao/users'; //            documento = UID do Authentication
 export const COLECAO_BASES = 'env/producao/xpts'; //                id da base -> { name, active }
 // Coleção PRÓPRIA das solicitações. Não é a subcoleção "backups" que já existe no XPT.
 export const COLECAO_BACKUPS = 'env/producao/backup_requests';
+// Vínculo com o Telegram: códigos gerados pelo app e vínculos gravados pelo Apps Script (documento = UID).
+export const COLECAO_TG_CODIGOS = 'env/producao/telegram_codigos';
+export const COLECAO_TG_VINCULOS = 'env/producao/telegram_vinculos';
+// Usuário do robô SEM o @ (ex.: 'coopmetro_backup_bot'). Público, não é segredo. Vazio = o app só mostra o código.
+export const BOT_TELEGRAM_USUARIO = '';
 
 // ---- Campos do documento de usuário ----
 export const CAMPOS_USUARIO = {

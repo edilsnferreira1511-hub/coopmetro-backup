@@ -7,7 +7,8 @@ import {
 } from './acesso.js';
 import * as api from './servicos.js';
 import { abrirLeitorQr } from './leitorqr.js';
-import { configPendente, VERSAO_APP } from './config.js';
+import { configPendente, VERSAO_APP, BOT_TELEGRAM_USUARIO } from './config.js';
+import { VALIDADE_CODIGO_MIN } from './telegram.js';
 
 const hoje = () => {
   const d = new Date();
@@ -318,6 +319,58 @@ export function telaFiltros(ctx) {
     botao('Voltar', { aoClicar: () => ctx.voltar() }));
 }
 
+// ---------------------------------------------------------------- telegram
+// Vincula o Telegram da pessoa para receber avisos (coord. geral: pedido novo; despacho: pedido decidido).
+function cartaoTelegram(ctx) {
+  const p = ctx.perfil;
+  if (!['despachante', 'supervisor', 'coordenador_geral'].some((c) => temCargo(p, c))) return null;
+  const alvo = h('div', { class: 'coluna' }, carregando('Verificando…'));
+  const caixa = cartao(titulo2('Avisos no Telegram'), alvo);
+  let relogio = null;
+  const parar = () => { if (relogio) { clearInterval(relogio); relogio = null; } };
+
+  const mostrarVinculado = () => {
+    parar();
+    alvo.replaceChildren(banner('success', 'Telegram vinculado. Os avisos chegam por lá.'),
+      muted(p.cargos.includes('coordenador_geral') ? 'Você recebe um aviso a cada pedido novo.'
+        : p.cargos.includes('supervisor') ? 'Você recebe um aviso a cada pedido novo das suas bases.'
+        : 'Você recebe um aviso quando seus pedidos forem aprovados ou recusados.'),
+      botao('Desvincular', { aoClicar: async () => {
+        try { await api.desvincularTelegram(p); mostrarInicial(); } catch (e) { alvo.prepend(banner('error', e.message)); }
+      } }));
+  };
+  const mostrarInicial = () => {
+    parar();
+    alvo.replaceChildren(muted('Vincule o seu Telegram para receber avisos de pedidos. Leva menos de 1 minuto.'),
+      botao('Vincular Telegram', { variante: 'primary', aoClicar: gerar }));
+  };
+  const gerar = async () => {
+    try {
+      const codigo = await api.gerarCodigoTelegram(p);
+      const inicio = Date.now();
+      const status = h('div', { class: 'muted' }, 'Aguardando você mandar o código ao robô…');
+      alvo.replaceChildren(
+        muted('1. Abra o robô do COOPMETRO no Telegram e aperte Iniciar.'),
+        muted('2. Mande este código para o robô:'),
+        h('div', { class: 'codigo-tg', 'aria-label': 'Código de vínculo' }, codigo),
+        BOT_TELEGRAM_USUARIO ? h('a', { class: 'btn glass primary', href: `https://t.me/${BOT_TELEGRAM_USUARIO}?start=${codigo}`, target: '_blank', rel: 'noopener' }, 'Abrir o robô no Telegram') : null,
+        muted(`3. Em até 1 minuto esta tela mostra "vinculado". O código vale ${VALIDADE_CODIGO_MIN} minutos.`),
+        status,
+        botao('Cancelar', { aoClicar: () => mostrarInicial() }));
+      parar();
+      relogio = setInterval(async () => {
+        if (!alvo.isConnected) return parar();
+        if (Date.now() - inicio > VALIDADE_CODIGO_MIN * 60000) { mostrarInicial(); alvo.prepend(banner('warning', 'O código venceu. Gere um novo.')); return; }
+        try { if (await api.vinculoTelegram(p)) mostrarVinculado(); } catch { /* tenta de novo no próximo ciclo */ }
+      }, 8000);
+    } catch (e) { alvo.prepend(banner('error', e.message)); }
+  };
+
+  api.vinculoTelegram(p).then((v) => (v ? mostrarVinculado() : mostrarInicial()))
+    .catch((e) => alvo.replaceChildren(banner('error', e.message || 'Não foi possível verificar o vínculo.')));
+  return caixa;
+}
+
 // ---------------------------------------------------------------- perfil
 export function telaPerfil(ctx) {
   const p = ctx.perfil;
@@ -327,6 +380,7 @@ export function telaPerfil(ctx) {
       item('Cargo no XPT', p.cargoOriginal), item('Bases vinculadas', p.todasAsBases ? 'Todas (pelo cargo)' : p.bases.map(ctx.nomeBase).join(', ') || 'Nenhuma'),
       muted('Cargo e base vêm do cadastro do sistema e não podem ser alterados aqui.')),
     podeGerirAcessos(p) ? banner('info', 'Gestão de acessos: definição de regras pendente (ver PENDENCIAS.md).') : null,
-    cartao(titulo2('Sistema'), item('Versão do app', VERSAO_APP), muted('Espelho Google Planilhas: não configurado')),
+    cartaoTelegram(ctx),
+    cartao(titulo2('Sistema'), item('Versão do app', VERSAO_APP)),
     botao('Sair', { variante: 'danger', aoClicar: api.sair }));
 }
