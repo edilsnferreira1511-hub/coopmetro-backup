@@ -12,7 +12,7 @@ import {
 import { FIREBASE_CONFIG, COLECAO_BACKUPS, COLECAO_USUARIOS, COLECAO_BASES, COLECAO_TG_CODIGOS, COLECAO_TG_VINCULOS } from './config.js';
 import { gerarCodigo } from './telegram.js';
 import { mapearUsuarioXpt } from './perfil.js';
-import { podeCriar, podeDecidir, podeColocarEmAnalise, podeCancelar, basesVisiveis } from './acesso.js';
+import { podeCriar, podeDecidir, podeColocarEmAnalise, podeCancelar, podeExcluir, basesVisiveis, veSoOsProprios } from './acesso.js';
 
 // Traduz o erro do Firebase para uma frase que a pessoa entende.
 function traduzir(e) {
@@ -98,15 +98,22 @@ async function _criarSolicitacao(p, dados) {
 }
 
 async function _listarSolicitacoes(p, f = {}) {
-  const permitidas = basesVisiveis(p);
-  let bases = f.bases?.length ? f.bases : permitidas === 'TODAS' ? undefined : permitidas;
-  if (permitidas !== 'TODAS' && bases) bases = bases.filter((b) => permitidas.includes(b));
-  if (permitidas !== 'TODAS' && (!bases || bases.length === 0)) return [];
-  // Uma consulta por base (where ==): é o formato que as regras do Firestore conseguem validar com segurança,
-  // e dispensa índice composto. Sem `bases` (só quem tem acesso a todas) lê a coleção inteira.
-  const consultas = bases ? bases.map((b) => query(col(), where('xptId', '==', b), limit(500))) : [query(col(), limit(500))];
+  let consultas;
+  if (veSoOsProprios(p)) {
+    // Despacho: só os pedidos dele (as regras do Firestore também exigem isso na consulta).
+    consultas = [query(col(), where('solicitante.uid', '==', p.uid), limit(500))];
+  } else {
+    const permitidas = basesVisiveis(p);
+    let bases = f.bases?.length ? f.bases : permitidas === 'TODAS' ? undefined : permitidas;
+    if (permitidas !== 'TODAS' && bases) bases = bases.filter((b) => permitidas.includes(b));
+    if (permitidas !== 'TODAS' && (!bases || bases.length === 0)) return [];
+    // Uma consulta por base (where ==): é o formato que as regras do Firestore conseguem validar com segurança,
+    // e dispensa índice composto. Sem `bases` (só quem tem acesso a todas) lê a coleção inteira.
+    consultas = bases ? bases.map((b) => query(col(), where('xptId', '==', b), limit(500))) : [query(col(), limit(500))];
+  }
   const snaps = await Promise.all(consultas.map((q) => getDocs(q)));
   let linhas = snaps.flatMap((s) => s.docs.map((d) => deDoc(d.id, d.data())));
+  linhas = linhas.filter((r) => !r.excluido); // excluídos saem das listas (a planilha guarda o histórico)
   linhas.sort((a, b) => String(b.criadoEm).localeCompare(String(a.criadoEm)));
   if (f.status?.length) linhas = linhas.filter((r) => f.status.includes(r.status));
   if (f.de) linhas = linhas.filter((r) => r.dataBackup >= f.de);
@@ -143,6 +150,14 @@ async function _cancelar(p, r) {
   await updateDoc(doc(db, COLECAO_BACKUPS, r.id), { status: 'CANCELADO', historico: arrayUnion(entrada) });
 }
 
+/** Exclusão lógica (só admin_sistema): o pedido sai das listas e a planilha o marca como Excluído. Nada é apagado. */
+async function _excluirSolicitacao(p, r, motivo) {
+  if (!podeExcluir(p, r)) throw new Error('Só o administrador do sistema exclui.');
+  const m = String(motivo ?? '').trim();
+  if (!m) throw new Error('Informe o motivo da exclusão.');
+  await updateDoc(doc(db, COLECAO_BACKUPS, r.id), { excluido: { porUid: p.uid, porNome: p.nome, em: agora(), motivo: m.slice(0, 300) } });
+}
+
 // ---------- Vínculo com o Telegram ----------
 // O app só gera o código e lê/apaga o vínculo. Quem grava o vínculo é o Apps Script (conta de serviço).
 async function _gerarCodigoTelegram(p) {
@@ -166,6 +181,7 @@ export const obterSolicitacao = seguro(_obterSolicitacao);
 export const colocarEmAnalise = seguro(_colocarEmAnalise);
 export const decidir = seguro(_decidir);
 export const cancelar = seguro(_cancelar);
+export const excluirSolicitacao = seguro(_excluirSolicitacao);
 export const gerarCodigoTelegram = seguro(_gerarCodigoTelegram);
 export const vinculoTelegram = seguro(_vinculoTelegram);
 export const desvincularTelegram = seguro(_desvincularTelegram);

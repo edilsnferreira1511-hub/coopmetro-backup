@@ -1,15 +1,14 @@
 // Ponto de entrada: autenticação, perfil, rotas (hash) e barra de navegação de vidro.
 import * as api from './servicos.js';
-import { h, carregando } from './ui.js';
-import { abasPermitidas } from './acesso.js';
+import { h, carregando, icone, ICONES } from './ui.js';
+import { abasPermitidas, rotuloAba } from './acesso.js';
 import {
-  telaLogin, telaSemAcesso, telaInicio, telaNova, telaSolicitacoes, telaDetalhes, telaAnalise,
-  telaPainel, telaAvisos, telaFiltros, telaPerfil,
+  telaLogin, telaSemAcesso, telaInicio, telaPainel, telaAvisos, telaPerfil,
 } from './telas.js';
+import { telaNova, telaDetalhes, telaAnalise } from './solicitacao.js';
+import { telaSolicitacoes, telaRelatorio } from './historico.js';
 
 const raiz = document.getElementById('app');
-const ROTULO = { inicio: 'Início', nova: 'Nova', solicitacoes: 'Pedidos', painel: 'Painel', notificacoes: 'Avisos', perfil: 'Perfil' };
-const ICONE = { inicio: '⌂', nova: '＋', solicitacoes: '☰', painel: '◧', notificacoes: '🔔', perfil: '☺' };
 const HASH_ABA = { inicio: '#/', nova: '#/nova', solicitacoes: '#/solicitacoes', painel: '#/painel', notificacoes: '#/avisos', perfil: '#/perfil' };
 
 let estado = { fase: 'carregando', perfil: null, motivo: '' };
@@ -32,15 +31,15 @@ function abaDoHash(partes) {
   if (!a) return 'inicio';
   if (a === 'avisos') return 'notificacoes';
   if (['nova', 'solicitacoes', 'painel', 'perfil'].includes(a)) return a;
-  if (a === 'solicitacao' || a === 'analise' || a === 'filtros') return 'solicitacoes';
+  if (a === 'solicitacao' || a === 'analise' || a === 'filtros' || a === 'relatorio') return 'solicitacoes';
   return 'inicio';
 }
 
 function barra(abas, ativa) {
-  const nav = h('nav', { class: 'glass tabbar', 'aria-label': 'Navegação principal' });
+  const nav = h('nav', { class: 'tabbar', 'aria-label': 'Navegação principal' });
   for (const a of abas) {
     const b = h('button', { type: 'button', class: `tab ${a === ativa ? 'ativa' : ''}`, 'aria-current': a === ativa ? 'page' : null },
-      h('span', { class: 'tab-icone', 'aria-hidden': 'true' }, ICONE[a]), h('span', { class: 'tab-rotulo' }, ROTULO[a]));
+      icone(ICONES[a]), h('span', { class: 'tab-rotulo' }, rotuloAba(estado.perfil, a)));
     b.addEventListener('click', () => { location.hash = HASH_ABA[a]; });
     nav.append(b);
   }
@@ -59,13 +58,16 @@ function desenhar() {
   const [a, id] = partes;
   if (a === 'solicitacao' && id) tela = telaDetalhes(ctx, id);
   else if (a === 'analise' && id) tela = telaAnalise(ctx, id);
-  else if (a === 'filtros') tela = telaFiltros(ctx);
+  else if (a === 'relatorio') tela = telaRelatorio(ctx);
+  else if (a === 'filtros') { location.hash = '#/solicitacoes'; return; }
   else {
     // Aba não liberada => volta para uma liberada (a segurança real está nas regras do Firestore).
     if (!abas.includes(aba)) { aba = abas.includes('inicio') ? 'inicio' : abas.includes('painel') ? 'painel' : 'perfil'; }
     tela = { inicio: telaInicio, nova: telaNova, solicitacoes: telaSolicitacoes, painel: telaPainel, notificacoes: telaAvisos, perfil: telaPerfil }[aba](ctx);
   }
-  raiz.replaceChildren(tela, barra(abas, aba));
+  // Telas de preenchimento (nova solicitação e decisão) usam uma barra de ações própria, sem a navegação.
+  const semBarra = a === 'analise' || (a === 'nova' && !id);
+  raiz.replaceChildren(...(semBarra ? [tela] : [tela, barra(abas, aba)]));
   window.scrollTo(0, 0);
 }
 

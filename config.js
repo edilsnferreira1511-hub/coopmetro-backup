@@ -16,7 +16,7 @@ export const FIREBASE_CONFIG = {
 };
 
 // Versão exibida no Perfil (confira se o celular está com o site atualizado). Mantenha igual ao VERSAO do sw.js.
-export const VERSAO_APP = 'v8';
+export const VERSAO_APP = 'v9';
 
 // ---- Caminhos no Firestore do XPT (informados pelo responsável) ----
 export const COLECAO_USUARIOS = 'env/producao/users'; //            documento = UID do Authentication
@@ -40,13 +40,17 @@ export const CAMPOS_USUARIO = {
 // Valor gravado em `role` no XPT -> papel deste app.
 // Cargo que não está aqui NÃO tem acesso (falha fechada).
 export const MAPA_CARGOS = {
-  despacho: 'despachante',
-  supervisor: 'supervisor',
-  coord_geral: 'coordenador_geral',
-  administrador: 'administrador',
-  admin_sistema: 'administrador',
-  // coord_base: A DEFINIR (ver PENDENCIAS.md). motorista: sem acesso a este sistema.
+  despacho: 'despachante', //          cria pedidos; vê só os dele
+  coord_base: 'coordenador_base', //   cria pedidos; vê todos os da base dele
+  supervisor: 'supervisor', //         vê os das bases dele e coloca em análise
+  coord_geral: 'coordenador_geral', // decide; vê todos
+  administrador: 'administrativo', //  só consulta (todas as bases), filtra e gera PDF
+  admin_sistema: 'admin_sistema', //   consulta tudo, gera PDF e exclui
+  // motorista e totem: sem acesso a este sistema.
 };
+
+// Motivos aceitos no pedido (as regras do Firestore conferem esta mesma lista).
+export const MOTIVOS = ['Sinistro', 'Falha mecânica', 'Apoio de rota', 'Apoio logística'];
 
 // Pelo cadastro do XPT, estes cargos enxergam todas as bases (mesmo com xptIds vazio).
 export const CARGOS_TODAS_AS_BASES = ['admin_sistema', 'administrador', 'coord_geral'];

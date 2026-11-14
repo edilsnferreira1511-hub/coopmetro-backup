@@ -1,20 +1,22 @@
 import {
-  h, cabecalho, botao, cartao, titulo2, muted, rotulo, item, badge, banner, carregando, vazio, campo, chips, fmt,
+  h, cabecalho, botao, cartao, titulo2, muted, item, banner, carregando, vazio, campo, fmt, badge, icone, ICONES,
 } from './ui.js';
-import { ROTULO_STATUS, TODOS_STATUS } from './status.js';
-import {
-  temCargo, podeVer, podeDecidir, podeColocarEmAnalise, podeCancelar, podeGerirAcessos,
-} from './acesso.js';
+import { ROTULO_STATUS } from './status.js';
+import { temCargo, CARGOS_CRIAM, CARGOS_REVISAM, podeGerirAcessos } from './acesso.js';
 import * as api from './servicos.js';
-import { abrirLeitorQr } from './leitorqr.js';
 import { configPendente, VERSAO_APP, BOT_TELEGRAM_USUARIO } from './config.js';
 import { VALIDADE_CODIGO_MIN } from './telegram.js';
+import { rotaDe, dataCurta } from './filtro.js';
 
-const hoje = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+export const ROTULO_CARGO = {
+  despachante: 'Despacho', coordenador_base: 'Coordenador de base', supervisor: 'Supervisor', coordenador_geral: 'Coordenação geral',
+  administrativo: 'Administrador', admin_sistema: 'Administrador do sistema',
 };
-const ROTULO_CARGO = { despachante: 'Despachante', supervisor: 'Supervisor', coordenador_geral: 'Coordenador geral', administrador: 'Administrador' };
+const algum = (p, lista) => lista.some((c) => temCargo(p, c));
+const dataLonga = () => {
+  const t = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
+  return t.charAt(0).toUpperCase() + t.slice(1);
+};
 
 // ---------------------------------------------------------------- login
 export function telaLogin(ctx) {
@@ -31,7 +33,7 @@ export function telaLogin(ctx) {
   });
   const falta = configPendente();
   return h('main', { class: 'tela login' },
-    h('div', { class: 'login-marca' }, h('img', { src: 'icone-192.png', alt: 'COOPMETRO', width: 112, height: 112, class: 'logo grande' }),
+    h('div', { class: 'login-marca' }, h('img', { src: 'icone-192.png', alt: 'COOPMETRO', width: 96, height: 96, class: 'logo grande' }),
       h('h1', { class: 'h1' }, 'COOPMETRO BACKUP'), muted('Use o mesmo acesso do COOPMETRO XPT')),
     falta.length ? banner('warning', `Configuração pendente em config.js: ${falta.join('; ')}.`) : null,
     email, senha, erro, entrar);
@@ -41,17 +43,36 @@ export function telaSemAcesso(ctx, motivo) {
   return h('main', { class: 'tela' }, h('h1', { class: 'h1' }, 'Sem acesso'), banner('error', motivo), botao('Sair', { aoClicar: api.sair }));
 }
 
-// ---------------------------------------------------------------- lista reutilizável
-function cartaoSolicitacao(ctx, r) {
-  const el = h('button', { class: 'cartao clicavel', type: 'button' },
-    h('div', { class: 'linha entre' }, h('strong', {}, `${r.dataBackup} · ${ctx.nomeBase(r.xptId)}`), badge(r.status)),
-    muted(`SVC ${r.svc} · Rota ${r.rotaNome ?? r.rotaId ?? '—'}`),
-    muted(`${r.qtdPacotes} pacotes · ${r.qtdParadas} paradas · ${r.solicitante.nome}`));
+// ---------------------------------------------------------------- peças reutilizáveis
+const GALPAO = '<svg class="galpao" viewBox="0 0 220 120" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 118V50L110 14l100 36v68"/><path d="M10 118h200"/><rect x="34" y="60" width="152" height="58"/><path d="M34 72h152M34 84h152M34 96h152M34 108h152" stroke-opacity=".6"/><path d="M110 60v58" stroke-opacity=".8"/></g></svg>';
+function galpao() {
+  const t = document.createElement('template');
+  t.innerHTML = GALPAO; // markup fixo do código
+  return t.content.firstElementChild;
+}
+
+/** Cabeçalho da tela inicial: marca, base, data, nome e cargo, com o galpão em traço fino ao fundo. */
+function hero(ctx) {
+  const p = ctx.perfil;
+  const base = p.todasAsBases ? 'Todas as bases' : p.bases.map(ctx.nomeBase).join(' · ') || 'Sem base';
+  return h('header', { class: 'hero' }, galpao(),
+    h('div', { class: 'hero-linha' },
+      h('div', { class: 'marca' }, h('img', { src: 'icone-192.png', alt: '', width: 28, height: 28, class: 'logo' }), h('div', {}, 'COOPMETRO ', h('span', {}, 'Backup'))),
+      h('div', { class: 'pilula' }, base)),
+    h('div', { class: 'hero-texto' }, h('div', { class: 'muted' }, dataLonga()),
+      h('div', { class: 'nome' }, `Olá, ${p.nome.split(' ')[0]}`), h('div', { class: 'muted' }, ROTULO_CARGO[p.cargos[0]] ?? '')));
+}
+
+export function cartaoSolicitacao(ctx, r) {
+  const el = h('button', { class: 'item-lista', type: 'button' },
+    h('div', {}, h('div', { class: 't' }, rotaDe(r), h('span', {}, ` · ${ctx.nomeBase(r.xptId)}`)),
+      h('div', { class: 's' }, `${r.motivo} · ${r.qtdPacotes} pacotes · ${dataCurta(r.dataBackup)} · ${r.solicitante.nome}`)),
+    badge(r.status));
   el.addEventListener('click', () => ctx.ir(`#/solicitacao/${encodeURIComponent(r.id)}`));
   return el;
 }
 
-async function carregarLista(ctx, filtros, alvo, { aoCarregar } = {}) {
+export async function carregarLista(ctx, filtros, alvo, { aoCarregar } = {}) {
   alvo.replaceChildren(carregando());
   try {
     const linhas = await api.listarSolicitacoes(ctx.perfil, filtros);
@@ -65,202 +86,80 @@ async function carregarLista(ctx, filtros, alvo, { aoCarregar } = {}) {
   }
 }
 
-// ---------------------------------------------------------------- início (despachante)
+const ORDEM_STATUS = ['PENDENTE', 'EM_ANALISE', 'APROVADO', 'RECUSADO'];
+function contadores(ctx, linhas) {
+  const raiz = h('div', { class: 'contadores' });
+  ORDEM_STATUS.forEach((s) => {
+    const b = h('button', { type: 'button', class: 'contador', 'aria-label': ROTULO_STATUS[s] },
+      h('div', { class: 'numero' }, String(linhas.filter((r) => r.status === s).length)),
+      h('div', { class: 'rot' }, h('i', { class: `ponto p-${s}` }), ROTULO_STATUS[s]));
+    b.addEventListener('click', () => { ctx.definirFiltros({ status: [s] }); ctx.ir('#/solicitacoes'); });
+    raiz.append(b);
+  });
+  return raiz;
+}
+
+const emAberto = (r) => r.status === 'PENDENTE' || r.status === 'EM_ANALISE';
+const maisAntigoPrimeiro = (a, b) => String(a.criadoEm).localeCompare(String(b.criadoEm));
+
+// ---------------------------------------------------------------- início (por cargo)
 export function telaInicio(ctx) {
   const p = ctx.perfil;
-  const caixa = h('div');
-  const raiz = h('main', { class: 'tela' },
-    cabecalho(`Olá, ${p.nome.split(' ')[0]}`, p.bases.map(ctx.nomeBase).join(' · ') || 'Sem base vinculada'),
-    p.bases.length === 0 ? banner('warning', 'Seu usuário não tem base vinculada. Fale com o administrador.') : null,
-    botao('Nova solicitação de backup', { variante: 'primary', aoClicar: () => ctx.ir('#/nova') }),
-    botao('Ver solicitações da minha base', { aoClicar: () => ctx.ir('#/solicitacoes') }),
-    cartao(titulo2('Em andamento'), caixa));
-  carregarLista(ctx, ctx.filtros, caixa, {
-    aoCarregar: (linhas) => {
-      const n = linhas.filter((r) => r.status === 'PENDENTE' || r.status === 'EM_ANALISE').length;
-      caixa.append(h('div', { class: 'numero' }, String(n)), muted('solicitações aguardando decisão'));
-    },
-  });
-  return raiz;
-}
-
-// ---------------------------------------------------------------- nova solicitação
-export function telaNova(ctx) {
-  const p = ctx.perfil;
-  const estado = { rota: null, veiculo: null, base: p.bases.length === 1 ? p.bases[0] : '' };
-  const resumoRota = h('div');
-  const resumoVeic = h('div');
-  const erro = h('div');
-
-  const pintar = () => {
-    resumoRota.replaceChildren(estado.rota
-      ? h('div', {}, h('div', {}, `SVC ${estado.rota.svc} · Rota ${estado.rota.rota}`), muted(`Contêiner ${estado.rota.containerId}`))
-      : muted('Nenhuma rota lida.'));
-    resumoVeic.replaceChildren(estado.veiculo
-      ? h('div', {}, h('div', {}, `Placa ${estado.veiculo.placa} · ${estado.veiculo.tipoVeiculo ?? 'tipo n/d'}`),
-        muted(`${estado.veiculo.carrierName} · ID no QR ${estado.veiculo.qrId}`))
-      : muted('Opcional: leia o QR do veículo.'));
-  };
-  pintar();
-
-  const seletorBase = p.bases.length
-    ? chips(p.bases.map((b) => ({ valor: b, rotulo: ctx.nomeBase(b) })), estado.base ? [estado.base] : [], { aoMudar: ([b]) => { estado.base = b; } })
-    : banner('warning', 'Nenhuma base vinculada ao seu usuário.');
-  const data = campo('Data do backup', { tipo: 'date', valor: hoje() });
-  const motorista = campo('Nome do motorista');
-  const pacotes = campo('Quantidade de pacotes', { tipo: 'number', modo: 'numeric' });
-  const paradas = campo('Quantidade de paradas', { tipo: 'number', modo: 'numeric' });
-  const motivo = campo('Motivo da solicitação', { multilinha: true });
-
-  const enviar = botao('Enviar solicitação', {
-    variante: 'primary',
-    aoClicar: async () => {
-      erro.replaceChildren();
-      const falha = (m) => erro.append(banner('error', m));
-      if (!estado.base) return falha('Escolha a base solicitante.');
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(data.input.value)) return falha('Data inválida.');
-      if (!estado.rota) return falha('Leia o QR Code da rota.');
-      const np = Number(pacotes.input.value), nd = Number(paradas.input.value);
-      if (!pacotes.input.value || !paradas.input.value || !Number.isInteger(np) || np < 0 || !Number.isInteger(nd) || nd < 0) return falha('Pacotes e paradas devem ser números inteiros.');
-      if (!motivo.input.value.trim()) return falha('Informe o motivo.');
-      let veiculo;
-      if (estado.veiculo) { const { tipo, ...resto } = estado.veiculo; veiculo = resto; }
-      const dados = {
-        dataBackup: data.input.value, svc: estado.rota.svc, xptId: estado.base, rotaId: estado.rota.rota,
-        rotaNome: estado.rota.rota, containerId: estado.rota.containerId,
-        qtdPacotes: np, qtdParadas: nd, motivo: motivo.input.value.trim(),
-      };
-      if (veiculo) dados.veiculo = veiculo;
-      if (motorista.input.value.trim()) dados.motoristaNome = motorista.input.value.trim();
-      try {
-        const id = await api.criarSolicitacao(p, dados);
-        ctx.ir(`#/solicitacao/${encodeURIComponent(id)}`);
-      } catch (e) {
-        const recusado = String(e.message).includes('servidor recusou');
-        falha((e.message || 'Não foi possível enviar a solicitação.')
-          + (recusado ? ` [Detalhe técnico — versão ${VERSAO_APP}; cargo: ${p.cargoOriginal}; base escolhida: ${estado.base}; bases do usuário: ${p.bases.join(', ') || 'nenhuma'}; uid: ${p.uid}]` : ''));
-      }
-    },
-  });
-
-  return h('main', { class: 'tela' },
-    cabecalho('Nova solicitação', 'Pagamento de backup'),
-    cartao(rotulo('Base solicitante'), seletorBase, muted('Somente as bases vinculadas ao seu usuário.')),
-    data,
-    cartao(rotulo('Rota'), resumoRota,
-      botao('Ler QR Code da rota', { aoClicar: () => abrirLeitorQr({ esperado: 'rota', aoConfirmar: (d) => { estado.rota = d; pintar(); } }) })),
-    cartao(rotulo('Veículo / motorista'), resumoVeic,
-      botao('Ler QR Code do veículo', { aoClicar: () => abrirLeitorQr({ esperado: 'veiculo', aoConfirmar: (d) => { estado.veiculo = d; pintar(); } }) }),
-      motorista),
-    pacotes, paradas, motivo, erro, enviar);
-}
-
-// ---------------------------------------------------------------- lista de solicitações
-export function telaSolicitacoes(ctx) {
-  const ativo = Object.values(ctx.filtros).some((v) => (Array.isArray(v) ? v.length : !!v));
+  const cria = algum(p, CARGOS_CRIAM);
+  const geral = temCargo(p, 'coordenador_geral');
+  const revisa = algum(p, CARGOS_REVISAM);
+  const global = p.todasAsBases === true;
   const caixa = h('div', { class: 'pilha' });
-  const raiz = h('main', { class: 'tela' },
-    cabecalho('Solicitações', ativo ? 'Filtros ativos' : 'Bases autorizadas'),
-    botao(ativo ? 'Filtros (ativos)' : 'Filtros', { aoClicar: () => ctx.ir('#/filtros') }),
+  const raiz = h('main', { class: 'tela' }, hero(ctx),
+    cria && p.bases.length === 0 ? banner('warning', 'Seu usuário não tem base vinculada. Fale com o administrador.') : null,
+    cria ? h('button', { type: 'button', class: 'acao-grande', onclick: () => ctx.ir('#/nova') }, h('span', {}, 'Nova solicitação de backup'), icone(ICONES.mais, 20)) : null,
     caixa);
-  carregarLista(ctx, ctx.filtros, caixa, {
+  carregarLista(ctx, {}, caixa, {
     aoCarregar: (linhas) => {
-      if (!linhas.length) return caixa.append(vazio('Nenhuma solicitação', 'Não há registros para os filtros e bases autorizadas.'));
-      caixa.append(muted(`${linhas.length} registro(s)`), ...linhas.map((r) => cartaoSolicitacao(ctx, r)));
+      const abertos = linhas.filter(emAberto).sort(maisAntigoPrimeiro);
+      if (geral) {
+        const nBases = new Set(abertos.map((r) => r.xptId)).size;
+        const d = h('button', { type: 'button', class: 'destaque', onclick: () => ctx.ir('#/painel') },
+          h('div', {}, h('div', { class: 'pequeno' }, 'Aguardando sua decisão'),
+            h('div', { class: 'grande' }, abertos.length ? `${abertos.length} solicitaç${abertos.length === 1 ? 'ão' : 'ões'} em ${nBases} base${nBases === 1 ? '' : 's'}` : 'Nada aguardando')),
+          h('div', { class: 'numero' }, String(abertos.length)));
+        caixa.append(d);
+      }
+      caixa.append(contadores(ctx, linhas));
+      if (global) {
+        const bases = [...new Set(linhas.map((r) => r.xptId))].sort();
+        if (bases.length) {
+          caixa.append(h('div', { class: 'pilha' }, h('div', { class: 'h2' }, 'Por base'),
+            h('div', { class: 'lista' }, ...bases.map((b) => {
+              const deB = linhas.filter((r) => r.xptId === b);
+              const n = deB.filter(emAberto).length;
+              return h('div', { class: 'barra-base' }, h('span', {}, ctx.nomeBase(b)),
+                h('span', { class: 'muted' }, `${deB.length} no total`, n ? ` · ${n} em aberto` : ' · em dia'));
+            }))));
+        }
+      }
+      const lista = revisa ? abertos.slice(0, 4) : linhas.slice(0, 4);
+      caixa.append(h('div', { class: 'pilha' },
+        h('div', { class: 'secao' }, h('div', { class: 'h2' }, geral ? 'Fila de decisão' : revisa ? 'Pendências' : 'Solicitações recentes'),
+          h('button', { type: 'button', class: 'link', onclick: () => ctx.ir(revisa ? '#/painel' : '#/solicitacoes') }, 'Ver todas')),
+        lista.length ? h('div', { class: 'lista' }, ...lista.map((r) => cartaoSolicitacao(ctx, r)))
+          : cartao(muted(revisa ? 'Nada pendente.' : 'Nenhuma solicitação ainda.'))));
     },
   });
   return raiz;
 }
 
-// ---------------------------------------------------------------- detalhes
-export function telaDetalhes(ctx, id) {
-  const raiz = h('main', { class: 'tela' }, carregando());
-  const carregar = async () => {
-    let r;
-    try { r = await api.obterSolicitacao(id); } catch (e) {
-      return raiz.replaceChildren(cabecalho('Solicitação'), banner('error', e.message || 'Falha ao carregar.'));
-    }
-    if (!r || !podeVer(ctx.perfil, r)) {
-      return raiz.replaceChildren(cabecalho('Solicitação'), vazio('Solicitação não encontrada', 'Ela não existe ou você não tem acesso à base.'),
-        botao('Voltar', { aoClicar: () => ctx.ir('#/solicitacoes') }));
-    }
-    const p = ctx.perfil;
-    const erro = h('div');
-    const agir = (fn) => async () => { erro.replaceChildren(); try { await fn(); await carregar(); } catch (e) { erro.append(banner('error', e.message)); } };
-    const v = r.veiculo ?? {};
-    raiz.replaceChildren(
-      cabecalho(`${r.svc} · ${r.rotaNome ?? r.rotaId ?? 'Rota'}`, `${r.dataBackup} · ${ctx.nomeBase(r.xptId)}`, badge(r.status)),
-      erro,
-      cartao(titulo2('Dados da rota'), item('SVC', r.svc), item('Rota', r.rotaNome ?? r.rotaId), item('Contêiner', r.containerId),
-        item('Pacotes', r.qtdPacotes), item('Paradas', r.qtdParadas)),
-      cartao(titulo2('Motorista / veículo'), item('Motorista', r.motoristaNome), item('Placa', v.placa),
-        item('Transportadora', v.carrierName), item('ID no QR do veículo', v.qrId)),
-      cartao(titulo2('Motivo'), h('div', {}, r.motivo), muted(`Solicitado por ${r.solicitante.nome}`)),
-      r.decisao ? cartao(titulo2(`Decisão: ${ROTULO_STATUS[r.decisao.resultado]}`), item('Justificativa', r.decisao.justificativa),
-        item('Desconto de cooperado', r.decisao.descontoCooperado === 'SIM' ? 'Haverá desconto' : r.decisao.descontoCooperado === 'NAO' ? 'Sem desconto' : r.decisao.descontoCooperado),
-        muted(`${r.decisao.porNome} · ${fmt(r.decisao.em)}`)) : null,
-      cartao(titulo2('Histórico'), ...r.historico.map((e) => h('div', {}, h('div', {}, `${ROTULO_STATUS[e.status]} · ${e.porNome}`),
-        muted(`${fmt(e.em)}${e.observacao ? ` — ${e.observacao}` : ''}`)))),
-      podeColocarEmAnalise(p, r) ? botao('Colocar em análise', { aoClicar: agir(() => api.colocarEmAnalise(p, r)) }) : null,
-      podeDecidir(p, r) ? botao('Analisar e decidir', { variante: 'primary', aoClicar: () => ctx.ir(`#/analise/${encodeURIComponent(r.id)}`) }) : null,
-      podeCancelar(p, r) ? botao('Cancelar solicitação', { variante: 'danger', aoClicar: agir(() => api.cancelar(p, r)) }) : null);
-  };
-  carregar();
-  return raiz;
-}
-
-// ---------------------------------------------------------------- análise e aprovação
-export function telaAnalise(ctx, id) {
-  const raiz = h('main', { class: 'tela' }, carregando());
-  api.obterSolicitacao(id).then((r) => {
-    const p = ctx.perfil;
-    if (!r || !podeDecidir(p, r)) {
-      return raiz.replaceChildren(cabecalho('Análise'), vazio('Sem permissão para decidir',
-        'Apenas o coordenador geral decide, nas bases autorizadas, e nunca sobre o próprio pedido.'),
-      botao('Voltar', { aoClicar: () => ctx.ir('#/solicitacoes') }));
-    }
-    let resultado = null; let desconto = null;
-    const just = campo('Justificativa', { multilinha: true });
-    const erro = h('div');
-    const decisao = chips([{ valor: 'APROVADO', rotulo: 'Aprovar' }, { valor: 'RECUSADO', rotulo: 'Recusar' }], [], { aoMudar: ([v]) => { resultado = v; } });
-    const desc = chips([{ valor: 'SIM', rotulo: 'Haverá desconto' }, { valor: 'NAO', rotulo: 'Sem desconto' }], [], { aoMudar: ([v]) => { desconto = v; } });
-    raiz.replaceChildren(
-      cabecalho('Análise e aprovação', `${r.svc} · ${ctx.nomeBase(r.xptId)} · ${r.dataBackup}`),
-      cartao(titulo2('Resumo'), h('div', {}, `Rota ${r.rotaNome ?? r.rotaId ?? '—'} · Contêiner ${r.containerId ?? '—'}`),
-        h('div', {}, `${r.qtdPacotes} pacotes · ${r.qtdParadas} paradas`), muted(`Motivo: ${r.motivo}`), muted(`Solicitante: ${r.solicitante.nome}`)),
-      rotulo('Decisão'), decisao, just, rotulo('Desconto de cooperado'), desc, erro,
-      botao('Confirmar decisão', {
-        variante: 'primary',
-        aoClicar: async () => {
-          erro.replaceChildren();
-          const falha = (m) => erro.append(banner('error', m));
-          if (!resultado) return falha('Escolha aprovar ou recusar.');
-          if (!just.input.value.trim()) return falha('A justificativa é obrigatória.');
-          if (!desconto) return falha('Registre a decisão sobre desconto de cooperado (sim ou não).');
-          try {
-            await api.decidir(p, r, { resultado, justificativa: just.input.value.trim(), descontoCooperado: desconto });
-            ctx.ir(`#/solicitacao/${encodeURIComponent(r.id)}`);
-          } catch (e) { falha(e.message); }
-        },
-      }),
-      botao('Voltar', { aoClicar: () => ctx.voltar() }));
-  }).catch((e) => raiz.replaceChildren(cabecalho('Análise'), banner('error', e.message)));
-  return raiz;
-}
-
-// ---------------------------------------------------------------- painel (supervisor / coordenador)
+// ---------------------------------------------------------------- pendências (supervisor) / decidir (coord. geral)
 export function telaPainel(ctx) {
+  const geral = temCargo(ctx.perfil, 'coordenador_geral');
   const caixa = h('div', { class: 'pilha' });
   const raiz = h('main', { class: 'tela' },
-    cabecalho('Painel', 'Bases autorizadas para o seu perfil'),
-    botao('Filtros por base, período e status', { aoClicar: () => ctx.ir('#/filtros') }), caixa);
-  carregarLista(ctx, ctx.filtros, caixa, {
+    cabecalho(geral ? 'Decidir' : 'Pendências', geral ? 'Pedidos aguardando decisão, dos mais antigos' : 'Pedidos das suas bases aguardando andamento'), caixa);
+  carregarLista(ctx, {}, caixa, {
     aoCarregar: (linhas) => {
-      const grade = h('div', { class: 'grade' }, ...['PENDENTE', 'EM_ANALISE', 'APROVADO', 'RECUSADO'].map((s) =>
-        cartao(h('div', { class: 'numero', style: `color:var(--${{ PENDENTE: 'warn', EM_ANALISE: 'info', APROVADO: 'ok', RECUSADO: 'danger' }[s]})` },
-          String(linhas.filter((r) => r.status === s).length)), muted(ROTULO_STATUS[s]))));
-      const pend = linhas.filter((r) => r.status === 'PENDENTE' || r.status === 'EM_ANALISE');
-      caixa.append(grade, titulo2('Pendências'), ...(pend.length ? pend.map((r) => cartaoSolicitacao(ctx, r)) : [vazio('Nada pendente')]));
+      const abertos = linhas.filter(emAberto).sort(maisAntigoPrimeiro);
+      if (!abertos.length) return caixa.append(vazio('Nada pendente', 'Quando entrar um pedido novo ele aparece aqui.'));
+      caixa.append(muted(`${abertos.length} em aberto`), h('div', { class: 'lista' }, ...abertos.map((r) => cartaoSolicitacao(ctx, r))));
     },
   });
   return raiz;
@@ -270,71 +169,46 @@ export function telaPainel(ctx) {
 export function telaAvisos(ctx) {
   const p = ctx.perfil;
   const caixa = h('div', { class: 'pilha' });
-  const raiz = h('main', { class: 'tela' }, cabecalho('Avisos', 'Atualizações das suas solicitações'), caixa);
+  const raiz = h('main', { class: 'tela' }, cabecalho('Avisos', 'Atualizações dos pedidos'), caixa);
   carregarLista(ctx, {}, caixa, {
     aoCarregar: (linhas) => {
-      const revisor = temCargo(p, 'supervisor') || temCargo(p, 'coordenador_geral');
+      const revisor = algum(p, CARGOS_REVISAM);
       const avisos = linhas.flatMap((r) => {
         const ult = r.historico[r.historico.length - 1];
         if (!ult) return [];
-        if (revisor && (r.status === 'PENDENTE' || r.status === 'EM_ANALISE')) return [{ id: r.id, em: ult.em, texto: `${ctx.nomeBase(r.xptId)} · ${r.svc}: aguardando decisão (${ROTULO_STATUS[r.status]})` }];
-        if (!revisor && r.solicitante.uid === p.uid && ult.porUid !== p.uid) return [{ id: r.id, em: ult.em, texto: `Sua solicitação de ${r.dataBackup} (${r.svc}) foi ${ROTULO_STATUS[r.status].toLowerCase()}` }];
+        if (revisor && emAberto(r)) return [{ id: r.id, em: ult.em, texto: `${ctx.nomeBase(r.xptId)} · ${rotaDe(r)}: aguardando decisão (${ROTULO_STATUS[r.status]})` }];
+        if (!revisor && r.solicitante.uid === p.uid && ult.porUid !== p.uid) return [{ id: r.id, em: ult.em, texto: `Sua solicitação de ${dataCurta(r.dataBackup)} (${rotaDe(r)}) foi ${ROTULO_STATUS[r.status].toLowerCase()}` }];
         return [];
       }).sort((a, b) => String(b.em).localeCompare(String(a.em)));
       if (!avisos.length) return caixa.append(vazio('Sem avisos', 'Nada novo por enquanto.'));
-      caixa.append(...avisos.map((a) => {
-        const el = h('button', { class: 'cartao clicavel', type: 'button' }, h('div', {}, a.texto), muted(fmt(a.em)));
+      caixa.append(h('div', { class: 'lista' }, ...avisos.map((a) => {
+        const el = h('button', { class: 'item-lista', type: 'button' }, h('div', {}, h('div', { class: 't' }, a.texto), h('div', { class: 's' }, fmt(a.em))));
         el.addEventListener('click', () => ctx.ir(`#/solicitacao/${encodeURIComponent(a.id)}`));
         return el;
-      }));
+      })));
     },
   });
   return raiz;
 }
 
-// ---------------------------------------------------------------- filtros
-export function telaFiltros(ctx) {
-  const p = ctx.perfil;
-  const f = { ...ctx.filtros };
-  const opcoesBases = p.todasAsBases ? ctx.basesConhecidas() : p.bases.map((b) => ({ valor: b, rotulo: ctx.nomeBase(b) }));
-  const baseUi = opcoesBases.length
-    ? chips(opcoesBases, f.bases ?? [], { multiplo: true, aoMudar: (v) => { f.bases = v; } })
-    : campo('Base (id)', { valor: f.bases?.[0] ?? '' });
-  const status = chips(TODOS_STATUS.map((s) => ({ valor: s, rotulo: ROTULO_STATUS[s] })), f.status ?? [], { multiplo: true, aoMudar: (v) => { f.status = v; } });
-  const de = campo('De', { tipo: 'date', valor: f.de ?? '' });
-  const ate = campo('Até', { tipo: 'date', valor: f.ate ?? '' });
-  return h('main', { class: 'tela' }, cabecalho('Filtros'), rotulo('Base'), baseUi,
-    muted('A lista é limitada às bases autorizadas. A segurança real está nas regras do servidor.'),
-    rotulo('Status'), status, de, ate,
-    botao('Aplicar', {
-      variante: 'primary',
-      aoClicar: () => {
-        const novo = { bases: f.bases?.length ? f.bases : undefined, status: f.status?.length ? f.status : undefined, de: de.input.value || undefined, ate: ate.input.value || undefined };
-        if (baseUi.input?.value.trim()) novo.bases = [baseUi.input.value.trim()];
-        ctx.definirFiltros(novo);
-        ctx.voltar();
-      },
-    }),
-    botao('Limpar', { aoClicar: () => { ctx.definirFiltros({}); ctx.voltar(); } }),
-    botao('Voltar', { aoClicar: () => ctx.voltar() }));
-}
-
 // ---------------------------------------------------------------- telegram
-// Vincula o Telegram da pessoa para receber avisos (coord. geral: pedido novo; despacho: pedido decidido).
+// Vincula o Telegram da pessoa para receber avisos (coord. geral, supervisor e coord. de base: pedido novo; quem pediu: decisão).
+const CARGOS_TELEGRAM = ['despachante', 'coordenador_base', 'supervisor', 'coordenador_geral'];
 function cartaoTelegram(ctx) {
   const p = ctx.perfil;
-  if (!['despachante', 'supervisor', 'coordenador_geral'].some((c) => temCargo(p, c))) return null;
+  if (!algum(p, CARGOS_TELEGRAM)) return null;
   const alvo = h('div', { class: 'coluna' }, carregando('Verificando…'));
   const caixa = cartao(titulo2('Avisos no Telegram'), alvo);
   let relogio = null;
   const parar = () => { if (relogio) { clearInterval(relogio); relogio = null; } };
+  const textoAviso = () => (temCargo(p, 'coordenador_geral') ? 'Você recebe um aviso a cada pedido novo.'
+    : temCargo(p, 'supervisor') ? 'Você recebe um aviso a cada pedido novo das suas bases.'
+      : temCargo(p, 'coordenador_base') ? 'Você recebe os pedidos novos da sua base e o resultado dos pedidos que você fez.'
+        : 'Você recebe um aviso quando seus pedidos forem aprovados ou recusados.');
 
   const mostrarVinculado = () => {
     parar();
-    alvo.replaceChildren(banner('success', 'Telegram vinculado. Os avisos chegam por lá.'),
-      muted(p.cargos.includes('coordenador_geral') ? 'Você recebe um aviso a cada pedido novo.'
-        : p.cargos.includes('supervisor') ? 'Você recebe um aviso a cada pedido novo das suas bases.'
-        : 'Você recebe um aviso quando seus pedidos forem aprovados ou recusados.'),
+    alvo.replaceChildren(banner('success', 'Telegram vinculado. Os avisos chegam por lá.'), muted(textoAviso()),
       botao('Desvincular', { aoClicar: async () => {
         try { await api.desvincularTelegram(p); mostrarInicial(); } catch (e) { alvo.prepend(banner('error', e.message)); }
       } }));
@@ -353,7 +227,7 @@ function cartaoTelegram(ctx) {
         muted('1. Abra o robô do COOPMETRO no Telegram e aperte Iniciar.'),
         muted('2. Mande este código para o robô:'),
         h('div', { class: 'codigo-tg', 'aria-label': 'Código de vínculo' }, codigo),
-        BOT_TELEGRAM_USUARIO ? h('a', { class: 'btn glass primary', href: `https://t.me/${BOT_TELEGRAM_USUARIO}?start=${codigo}`, target: '_blank', rel: 'noopener' }, 'Abrir o robô no Telegram') : null,
+        BOT_TELEGRAM_USUARIO ? h('a', { class: 'btn primary', href: `https://t.me/${BOT_TELEGRAM_USUARIO}?start=${codigo}`, target: '_blank', rel: 'noopener' }, 'Abrir o robô no Telegram') : null,
         muted(`3. Em até 1 minuto esta tela mostra "vinculado". O código vale ${VALIDADE_CODIGO_MIN} minutos.`),
         status,
         botao('Cancelar', { aoClicar: () => mostrarInicial() }));
@@ -376,10 +250,10 @@ export function telaPerfil(ctx) {
   const p = ctx.perfil;
   return h('main', { class: 'tela' },
     cabecalho(p.nome, p.email),
-    cartao(titulo2('Acesso'), item('Cargos', p.cargos.map((c) => ROTULO_CARGO[c]).join(', ')),
+    cartao(titulo2('Acesso'), item('Cargo', p.cargos.map((c) => ROTULO_CARGO[c]).join(', ')),
       item('Cargo no XPT', p.cargoOriginal), item('Bases vinculadas', p.todasAsBases ? 'Todas (pelo cargo)' : p.bases.map(ctx.nomeBase).join(', ') || 'Nenhuma'),
       muted('Cargo e base vêm do cadastro do sistema e não podem ser alterados aqui.')),
-    podeGerirAcessos(p) ? banner('info', 'Gestão de acessos: definição de regras pendente (ver PENDENCIAS.md).') : null,
+    podeGerirAcessos(p) ? banner('info', 'Você é administrador do sistema: consulta tudo, gera PDF e pode excluir pedidos.') : null,
     cartaoTelegram(ctx),
     cartao(titulo2('Sistema'), item('Versão do app', VERSAO_APP)),
     botao('Sair', { variante: 'danger', aoClicar: api.sair }));
